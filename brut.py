@@ -5,8 +5,8 @@ import os
 
 URL = "https://vm.play2go.cloud/api/auth/v4/public/token"
 EMAIL = "hobotzode1@gmail.com"
-CONCURRENCY = 300
-WORKERS = 300
+CONCURRENCY = 150
+WORKERS = 150
 
 CUSTOM_BASES = [
     "sezaze72", "Romart01", "sezaze", "romart", "Sezaze",
